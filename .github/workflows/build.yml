@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: masesk/spreach-dekstop-companion
+          token: ${{ secrets.GH_PAT }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-xinerama0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xfixes0 libxcb-xkb1 \
+            libxkbcommon-x11-0 espeak-ng
+
+      - name: Install espeak-ng (macOS)
+        if: runner.os == 'macOS'
+        run: brew install espeak-ng
+
+      - name: Install espeak-ng (Windows)
+        if: runner.os == 'Windows'
+        run: choco install espeak-ng -y
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Install spaCy model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Build
+        run: pyinstaller spreach.spec
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spreach-Windows
+          path: dist/Spreach.exe
+
+      - name: Zip app bundle (macOS)
+        if: runner.os == 'macOS'
+        run: zip -r dist/Spreach-macOS.zip dist/Spreach.app
+
+      - name: Upload artifact (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spreach-macOS
+          path: dist/Spreach-macOS.zip
+
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spreach-Linux
+          path: dist/Spreach
