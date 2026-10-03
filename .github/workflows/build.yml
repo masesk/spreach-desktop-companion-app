@@ -1,5 +1,12 @@
 name: Build
 
+# Builds the Spreach Desktop Companion (Rust/Tauri, from masesk/spreach-dekstop-companion)
+# for Windows, macOS and Linux, and publishes the installers as a GitHub release.
+#
+# Release by pushing a tag here (git tag v1.2.0 && git push origin v1.2.0), or run this
+# workflow manually with the tag. Tags must look like v1.2.3: the number becomes the app
+# version, and Windows MSI installers only accept plain numeric versions.
+
 on:
   push:
     tags: ['v*']
@@ -8,78 +15,81 @@ on:
       tag:
         description: 'Release tag (e.g. v1.0.0)'
         required: true
+      source_ref:
+        description: 'Branch, tag or commit of spreach-dekstop-companion to build'
+        required: false
+        default: main
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || 'main' }}
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # ONNX Runtime's prebuilt Linux library needs GCC 13's libstdc++, so Linux builds on
+        # 24.04 (the app then needs glibc 2.39+, e.g. Ubuntu 24.04 or Debian 13).
+        os: [ubuntu-24.04, windows-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
+      - name: Check tag format
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' must look like v1.2.3"
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           repository: masesk/spreach-dekstop-companion
+          ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.GH_PAT }}
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tauri-app
+
+      # espeak-ng's library is compiled from source: needs CMake and libclang, which the
+      # Windows and macOS runners already have.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libxcb-xinerama0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xfixes0 libxcb-xkb1 \
-            libxkbcommon-x11-0 espeak-ng
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev cmake libclang-dev
 
-      - name: Install espeak-ng (macOS)
-        if: runner.os == 'macOS'
-        run: brew install espeak-ng
+      # The npm package ships a prebuilt Tauri CLI.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-      - name: Install espeak-ng (Windows)
-        if: runner.os == 'Windows'
-        run: choco install espeak-ng -y
-
-      - name: Install Python dependencies
+      - name: Build installers
+        working-directory: tauri-app/src-tauri
+        # The tag's version overrides the one in tauri.conf.json.
         run: |
-          pip install pyinstaller
-          pip install -r requirements.txt
+          npx --yes @tauri-apps/cli@2 build --config "{\"version\": \"$VERSION\"}"
 
-      - name: Install spaCy model
-        run: python -m spacy download en_core_web_sm
-
-      - name: Build
-        run: pyinstaller spreach.spec
-
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Spreach-Windows
-          path: dist/Spreach.exe
-
-      - name: Zip app bundle (macOS)
-        if: runner.os == 'macOS'
-        run: zip -r dist/Spreach-macOS.zip dist/Spreach.app
-
-      - name: Upload artifact (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Spreach-macOS
-          path: dist/Spreach-macOS.zip
-
-      - name: Upload artifact (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Spreach-Linux
-          path: dist/Spreach
+          name: Spreach-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            tauri-app/target/release/bundle/msi/*.msi
+            tauri-app/target/release/bundle/nsis/*.exe
+            tauri-app/target/release/bundle/dmg/*.dmg
+            tauri-app/target/release/bundle/deb/*.deb
+            tauri-app/target/release/bundle/appimage/*.AppImage
 
   release:
     needs: build
@@ -97,14 +107,17 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          name: Release ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.TAG }}
           draft: false
           prerelease: false
+          fail_on_unmatched_files: true
           files: |
-            artifacts/Spreach-Windows/Spreach.exe
-            artifacts/Spreach-macOS/Spreach-macOS.zip
-            artifacts/Spreach-Linux/Spreach
+            artifacts/Spreach-Windows/**/*.exe
+            artifacts/Spreach-Windows/**/*.msi
+            artifacts/Spreach-macOS/**/*.dmg
+            artifacts/Spreach-Linux/**/*.deb
+            artifacts/Spreach-Linux/**/*.AppImage
 
       - name: Delete artifacts
         env:
