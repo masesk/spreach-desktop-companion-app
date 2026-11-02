@@ -3,9 +3,10 @@ name: Build
 # Builds the Spreach Desktop Companion (Rust/Tauri, from masesk/spreach-dekstop-companion)
 # for Windows, macOS and Linux, and publishes the installers as a GitHub release.
 #
-# Release by pushing a tag here (git tag v1.2.0 && git push origin v1.2.0), or run this
-# workflow manually with the tag. Tags must look like v1.2.3: the number becomes the app
-# version, and Windows MSI installers only accept plain numeric versions.
+# Release by pushing a tag here (git tag v1.4 && git push origin v1.4), or run this
+# workflow manually with the tag. Tags must look like v1.4 or v1.4.0: the number becomes
+# the app version (v1.4 builds as 1.4.0), and Windows MSI installers only accept plain
+# numeric versions.
 
 on:
   push:
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.0.0)'
+        description: 'Release tag (e.g. v1.4)'
         required: true
       source_ref:
         description: 'Branch, tag or commit of spreach-dekstop-companion to build'
@@ -42,11 +43,15 @@ jobs:
     steps:
       - name: Check tag format
         run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag '$TAG' must look like v1.2.3"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+            # Tauri needs a full semver version, so v1.4 builds as 1.4.0.
+            echo "VERSION=${TAG#v}.0" >> "$GITHUB_ENV"
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          else
+            echo "::error::Tag '$TAG' must look like v1.4 or v1.4.0"
             exit 1
           fi
-          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
         with:
